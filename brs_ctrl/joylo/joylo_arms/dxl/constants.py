@@ -44,6 +44,11 @@ class GoalPosition(Enum):
     LEN = 4
 
 
+class GoalVelocity(Enum):
+    ADDR = 104
+    LEN = 4
+
+
 class PresentVelocity(Enum):
     ADDR = 128
     LEN = 4

@@ -18,6 +18,9 @@ class DXLJointImpedanceController:
         slave_motor_ids: Optional[Union[int, Sequence[int]]] = None,
         master_motor_ids: Optional[Union[int, Sequence[int]]] = None,
     ):
+        """
+        The global torque callback returns any additional torques that need to be applied to the motors in this group
+        """
         if slave_motor_ids is not None:
             assert (
                 master_motor_ids is not None
@@ -86,11 +89,33 @@ class DXLJointImpedanceController:
         self._control_thread = None
 
         self._goal = None
+        self._global_torque_callback = None
+
+        self._should_move_to_goal = False
+
+    def register_global_torque_callback(self, callback):
+        """
+        Registers a callback function that returns the global torque to be added to the control command. 
+        """
+        self._global_torque_callback = callback
+
+    def interrupt_control(self):
+        """
+        Interrupts the control loop and stops sending commands to the motors.
+        """
+        self._should_move_to_goal = False
+
+    def resume_control(self):
+        """
+        Resumes the control loop and starts sending commands to the motors.
+        """
+        self._should_move_to_goal = True
 
     def _control(self, position_limit_high, position_limit_low):
         assert self._goal is not None, "Goal not set"
         while not self._stop_thread.is_set():
             curr_positions, curr_velocities = self._driver.get_joints()[:2]
+            # print(self._goal, curr_positions, curr_velocities)
             curr_positions = curr_positions[self._reading_motor_idxs]
             curr_velocities = curr_velocities[self._reading_motor_idxs]
             assert np.all(curr_positions <= position_limit_high) and np.all(
@@ -101,11 +126,18 @@ class DXLJointImpedanceController:
             self._curr_velocities = curr_velocities
 
             ctrl_cmd = np.zeros((len(self._driver.motor_ids),), dtype=np.float32)
-            ctrl_cmd[self._reading_motor_idxs] = (
-                self._Kp * delta_positions - self._Kd * curr_velocities
-            )
-            ctrl_cmd[self._slave_motor_idxs] = ctrl_cmd[self._master_motor_idxs]
 
+            # Move towards the goal position
+            if self._should_move_to_goal:
+                ctrl_cmd[self._reading_motor_idxs] += (
+                    self._Kp * delta_positions - self._Kd * curr_velocities
+                )
+                ctrl_cmd[self._slave_motor_idxs] = ctrl_cmd[self._master_motor_idxs]
+
+            if self._global_torque_callback is not None:
+                global_torque = self._global_torque_callback()
+                ctrl_cmd += global_torque
+                
             self._driver.set_joints(ctrl_cmd)
 
     def set_new_goal(self, goal: np.ndarray):
